@@ -1,12 +1,14 @@
+import traceback
+
 python_to_lisp_type = {
-    bool: "BOOLEAN",
-    type(None): "NULL",
-    int: "INTEGER",
-    float: "FLOAT",
-    complex: "COMPLEX",
-    list: "VECTOR",
-    dict: "HASH-TABLE",
-    str: "STRING",
+    bool       : "BOOLEAN",
+    type(None) : "NULL",
+    int        : "INTEGER",
+    float      : "FLOAT",
+    complex    : "COMPLEX",
+    list       : "VECTOR",
+    dict       : "HASH-TABLE",
+    str        : "STRING",
 }
 
 def dict_lispifier (dict):
@@ -41,7 +43,7 @@ def lispify (obj):
     Turn a python object into a string which can be parsed by Lisp reader.
     """
     if isinstance(obj, Exception):
-        return "".join(tb.format_exception(type(obj), obj, obj.__traceback__))
+        return "".join(traceback.format_exception(type(obj), obj, obj.__traceback__))
     else:
         return lispifiers[type(obj)](obj)
 
@@ -51,5 +53,5 @@ def py_to_lisp (obj):
         value_str = lispify(obj)
     except Exception as e:
         value_str = ("Error while Lispifying: " + \
-                     "".join(tb.format_exception(type(e), e, e.__traceback__)))
+                     "".join(traceback.format_exception(type(e), e, e.__traceback__)))
     return value_str

@@ -30,21 +30,23 @@
         (alexandria:plist-hash-table plist)
         s)))))
 
-(defun async-py-eval (content)
+(defun async-py-eval-request (content)
   (let ((fifo-path nil))
     (setf fifo-path
           (read-from-string
            (py-request "generic"
                        (list "mode"        "eval"
                              "content"      content))))
-    (read-from-string (monitor-fifo fifo-path))))
+    (monitor-fifo fifo-path)))
+
+(defun async-py-eval (content)
+  (read-from-string (async-py-eval-request content)))
 
 (defun monitor-fifo (fifo-path)
   ;; Better to use file-notify by Shinmera.
   (loop until (probe-file fifo-path))
   (with-open-file (fifo fifo-path)
-    (loop until (listen fifo))
-    (let ((msg (read-line fifo)))
+    (let ((msg (uiop:read-file-string fifo)))
       (progn (format t "Received: ~a~%" msg)
              (force-output))
       msg)))

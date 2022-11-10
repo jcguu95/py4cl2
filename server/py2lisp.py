@@ -22,11 +22,13 @@ def dict_lispifier (dict):
 def tuple_lispifier (tuple):
     return "(quote (" + " ".join(lispify(elt) for elt in tuple) + "))"
 
+def Exception_lispifier (exception):
+    return "".join(traceback.format_exception(type(exception), exception, exception.__traceback__))
+
 lispifiers = {
     dict       : dict_lispifier,
     tuple      : tuple_lispifier,
     int        : str,
-    # floats in python are double-floats of common-lisp
     # float      : lambda x: lispify_infnan_if_needed(str(x).replace("e", "d") if str(x).find("e") != -1 else str(x)+"d0"),
     # complex    : lambda x: "#C(" + lispify(x.real) + " " + lispify(x.imag) + ")",
     bool       : lambda x: "T" if x else "NIL",
@@ -43,15 +45,15 @@ def lispify (obj):
     Turn a python object into a string which can be parsed by Lisp reader.
     """
     if isinstance(obj, Exception):
-        return "".join(traceback.format_exception(type(obj), obj, obj.__traceback__))
+        return Exception_lispifier(obj)
     else:
         return lispifiers[type(obj)](obj)
 
-# Usage: py_to_lisp(eval(expr))
-def py_to_lisp (obj):
+# Usage: py2lisp(eval(expr))
+def py2lisp (obj):
     try:
         value_str = lispify(obj)
     except Exception as e:
-        value_str = ("Error while Lispifying: " + \
-                     "".join(traceback.format_exception(type(e), e, e.__traceback__)))
+        value_str = "Error while Lispifying: " + \
+                    "".join(traceback.format_exception(type(e), e, e.__traceback__))
     return value_str

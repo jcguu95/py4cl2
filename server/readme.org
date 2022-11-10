@@ -1,0 +1,4 @@
+#+begin_src common-lisp
+(async-py-eval "[1, 2, [True, False], {3: 4}, \"hello\"]")
+;; => #(1 2 #(T NIL) #<HASH-TABLE :TEST EQUALP :COUNT 1 {7008B7FF43}> "hello")
+#+end_src

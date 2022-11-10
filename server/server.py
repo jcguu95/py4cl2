@@ -5,18 +5,18 @@ from fifo import *
 from py2lisp import *
 
 def work (request, fifopath):
-    mode        = request["mode"]
-    content     = request["content"]
-    try:
-        if   mode == "eval":
-            result = py_to_lisp(eval(content))
-        elif mode == "exec":
-            exec(content)
-            result = None
-        # else: raise
-    except:
-        result = None
-        print("Exceptions during eval/exec.", result)
+    mode, content = request["mode"], request["content"]
+    if mode == "eval":
+        expr = content
+        try:
+            obj    = eval(expr)
+            result = py2lisp(obj)
+        except Exception as e:
+            result = py2lisp(e)
+    elif mode == "exec":
+        exec(content)
+        result = "NIL"
+    # print("Returning result: ", result)
     try:
         create_fifo(fifopath)
         write_fifo(fifopath, result)
@@ -31,20 +31,15 @@ def handle_request (request):
     return fifopath
 
 # request_examples = \
-#   [{"mode": "eval",
-#     "content": "1+1"},
-
-#    {"mode": "eval",
-#     "content": "1/0"},
-
-#    {"mode": "eval",
-#     "content": "8"},
-
+#   [{"mode": "eval", "content": "1+1"},
+#    {"mode": "eval", "content": "1/0"},
+#    {"mode": "eval", "content": "8"},
 #    {"mode": "exec",
 #     "content": """
 # def ggg (): return 7
 # print(ggg())
-# """}]
+# """}
+# ]
 
 ####################
 # Server
@@ -68,9 +63,9 @@ class Data(BaseModel):
 
 @app.post('/generic')
 async def method_generic (data: Data):
-    print("Receiving data:", data)
     request = {"mode":        data.mode,
                "content":     data.content}
+    print("Received request:", request)
     return handle_request(request)
 
 DEFAULT_PORT=8787

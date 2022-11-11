@@ -5,24 +5,28 @@ from fifo import *
 from py2lisp import *
 
 def work (request, fifopath):
-    mode, content = request["mode"], request["content"]
+    mode, expression = request["mode"], request["content"]
     if mode == "eval":
-        expr = content
         try:
-            obj    = eval(expr)
-            result = py2lisp(obj)
+            obj  = eval(expression)
+            dic  = lispify(obj)
+            kind = dic["kind"]
+            body = dic["body"]
         except Exception as e:
-            result = py2lisp(e)
-    elif mode == "exec":
-        exec(content)
-        result = "NIL"
-    # print("Returning result: ", result)
+            kind = "error"
+            body = lispify(e)["body"]
+        msg = encode(kind, body)
+    # TODO Support "exec" later.
+    # elif mode == "exec":
+    #     exec(content)
+    #     body = "NIL"
+    # print("Returning body: ", body)
     try:
+        print("Sending message: ", msg)
         create_fifo(fifopath)
-        write_fifo(fifopath, result)
+        write_fifo(fifopath, msg)
     finally:
-        print("Removing fifo: {0}".format(fifopath))
-        remove_fifo(fifopath)
+        async_remove_fifo(fifopath,120)
 
 def handle_request (request):
     fifopath = gen_fifopath()

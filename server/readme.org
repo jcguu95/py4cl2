@@ -1,4 +1,27 @@
+* Usage
+
 #+begin_src common-lisp
 (async-py-eval "[1, 2, [True, False], {3: 4}, \"hello\"]")
 ;; => #(1 2 #(T NIL) #<HASH-TABLE :TEST EQUALP :COUNT 1 {7008B7FF43}> "hello")
 #+end_src
+
+* current problem
+
+FastAPI is too slow. It seems to be one reason why the following
+gets stuck almost always.
+
+#+begin_src common-lisp
+(loop repeat 1000 do (lparallel:future (async-py-eval "1+1")))
+#+end_src
+
+I will use ZMQ for the clients to talk the server, and maybe even
+back (replacing what we're using now (named pipes)).
+
+For larger data (e.g. gigantic matrices), we can use shared memory.
+
+** NOTE: shared memory communication
+
+For sharing larger objects between Lisp and Python, we can use
+shared memory (e.g. [[https://sr.ht/~shunter/posix-shm/][posix-shm: POSIX shared memory bindings for
+Common Lisp]]). For usual communication, lets ditch FastAPI and
+try ZeroMQ.

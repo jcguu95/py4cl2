@@ -45,15 +45,20 @@ def lispify (obj):
     Turn a python object into a string which can be parsed by Lisp reader.
     """
     if isinstance(obj, Exception):
-        return Exception_lispifier(obj)
+        kind, body = "eval", Exception_lispifier(obj)
+    elif type(obj) in lispifiers.keys():
+        kind, body = "eval", lispifiers[type(obj)](obj)
     else:
-        return lispifiers[type(obj)](obj)
+        kind = "error"
+        body = "Unsupported Object Type:\n  Object : {0}\n  Type   : {1}".format(str(obj), str(type(obj)))
+    return {"kind": kind, "body": body}
 
-# Usage: py2lisp(eval(expr))
-def py2lisp (obj):
-    try:
-        value_str = lispify(obj)
-    except Exception as e:
-        value_str = "Error while Lispifying: " + \
-                    "".join(traceback.format_exception(type(e), e, e.__traceback__))
-    return value_str
+def encode (kind, body):
+    """Encode body into a message to be sent to Lisp."""
+    match kind:
+        case "eval":
+            return "r"+body
+        case "error":
+            return "e"+body
+        case _:
+            raise Exception

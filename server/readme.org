@@ -15,11 +15,6 @@ shouldn't make say 10k requests during a short period of time.
 For larger data (e.g. gigantic matrices), we can use shared
 memory in the future.
 
-To define variables or functions with execution.. we have a
-problem. Currently, a work around is to use =app.x = 3= or =app.f =
-(lambda x: x)=. But I'd like to see a more general and efficient
-way. I should take a look at how py4cl2 does it.
-
 ** NOTE: shared memory communication
 
 For sharing larger objects between Lisp and Python, we can use

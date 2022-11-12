@@ -18,7 +18,7 @@ def work (request, fifopath):
         msg = encode(kind, body)
     elif mode == "exec":
         try:
-            exec(content)
+            exec(content, globals(), globals())
             body = "T"
             kind = "eval"
         except Exception as e:

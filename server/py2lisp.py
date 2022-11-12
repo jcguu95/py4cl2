@@ -25,12 +25,27 @@ def tuple_lispifier (tuple):
 def Exception_lispifier (exception):
     return "".join(traceback.format_exception(type(exception), exception, exception.__traceback__))
 
+def float_lispifier (float):
+    infnan = {"infd0" : "float-features:double-float-positive-infinity",
+              "-infd0": "float-features:double-float-negative-infinity",
+              "inf"   : "float-features:single-float-positive-infinity",
+              "-inf"  : "float-features:single-float-negative-infinity",
+              "nan"   : "float-features:single-float-nan",
+              "nand0" : "float-features:double-float-nan"}
+    if str(float).find("e") != -1:
+        lispified_float = str(float).replace("e", "d")
+    else:
+        lispified_float = str(float)+"d0"
+    if lispified_float in infnan:
+        lispified_float = infnan[lispified_float]
+    return lispified_float
+
 lispifiers = {
     dict       : dict_lispifier,
     tuple      : tuple_lispifier,
     int        : str,
-    # float      : lambda x: lispify_infnan_if_needed(str(x).replace("e", "d") if str(x).find("e") != -1 else str(x)+"d0"),
-    # complex    : lambda x: "#C(" + lispify(x.real) + " " + lispify(x.imag) + ")",
+    float      : float_lispifier,
+    complex    : lambda x: "#C(" + lispify(x.real)["body"] + " " + lispify(x.imag)["body"] + ")",
     bool       : lambda x: "T" if x else "NIL",
     type       : lambda x: "(quote " + python_to_lisp_type[x] + ")",
     list       : lambda x: "#(" + " ".join(lispify(elt)["body"] for elt in x) + ")",

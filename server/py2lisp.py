@@ -13,14 +13,14 @@ python_to_lisp_type = {
 
 def dict_lispifier (dict):
     segment_  = "(setf (gethash (quote {}) table) (quote {}))"
-    segments  = [segment_.format(lispify(key), lispify(value)) for key, value in dict.items()]
+    segments  = [segment_.format(lispify(key)["body"], lispify(value)["body"]) for key, value in dict.items()]
     segment_0 = "#.(let ((table (make-hash-table :test (quote equalp)))) "
     segment_1 = " ".join(segments)
     segment_2 = " table)"
     return segment_0 + segment_1 + segment_2
 
 def tuple_lispifier (tuple):
-    return "(quote (" + " ".join(lispify(elt) for elt in tuple) + "))"
+    return "(quote (" + " ".join(lispify(elt)["body"] for elt in tuple) + "))"
 
 def Exception_lispifier (exception):
     return "".join(traceback.format_exception(type(exception), exception, exception.__traceback__))
@@ -33,7 +33,7 @@ lispifiers = {
     # complex    : lambda x: "#C(" + lispify(x.real) + " " + lispify(x.imag) + ")",
     bool       : lambda x: "T" if x else "NIL",
     type       : lambda x: "(quote " + python_to_lisp_type[x] + ")",
-    list       : lambda x: "#(" + " ".join(lispify(elt) for elt in x) + ")",
+    list       : lambda x: "#(" + " ".join(lispify(elt)["body"] for elt in x) + ")",
     str        : lambda x: "\"" + x.replace("\\", "\\\\").replace("\"", "\\\"")  + "\"",
     type(None) : lambda x: "NIL",
     # Symbol     : str,

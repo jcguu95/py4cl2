@@ -38,9 +38,7 @@ def write_fifo (fifopath, content):
         fifo.write("\n")
 
 def remove_fifo (fifopath, delay):
-    ""
-
-    "Remove the FIFO after synchronously sleep for DELAY seconds."""
+    """Remove the FIFO after synchronously sleep for DELAY seconds."""
     time.sleep(delay)
     print("Removing fifo: {0}".format(fifopath))
     os.remove(fifopath)

@@ -7,17 +7,18 @@
 
 * current problem
 
-FastAPI is too slow. It seems to be one reason why the following
-gets stuck almost always.
+FastAPI can handle around 200 requests per second.
 
-#+begin_src common-lisp
-(loop repeat 1000 do (lparallel:future (async-py-eval "1+1")))
-#+end_src
+However, python cannot afford too many threads at a time. So we
+shouldn't make say 10k requests during a short period of time.
 
-I will use ZMQ for the clients to talk the server, and maybe even
-back (replacing what we're using now (named pipes)).
+For larger data (e.g. gigantic matrices), we can use shared
+memory in the future.
 
-For larger data (e.g. gigantic matrices), we can use shared memory.
+To define variables or functions with execution.. we have a
+problem. Currently, a work around is to use =app.x = 3= or =app.f =
+(lambda x: x)=. But I'd like to see a more general and efficient
+way. I should take a look at how py4cl2 does it.
 
 ** NOTE: shared memory communication
 
@@ -25,3 +26,8 @@ For sharing larger objects between Lisp and Python, we can use
 shared memory (e.g. [[https://sr.ht/~shunter/posix-shm/][posix-shm: POSIX shared memory bindings for
 Common Lisp]]). For usual communication, lets ditch FastAPI and
 try ZeroMQ.
+
+** NOTE: CL-ZMQ can't be loaded correctly
+
+CFFI/GROVEL.. I don't know how to fix
+

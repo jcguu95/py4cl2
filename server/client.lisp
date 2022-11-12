@@ -33,48 +33,37 @@
         (alexandria:plist-hash-table plist)
         s)))))
 
+;; Better to use file-notify by Shinmera.
 (defun monitor-fifo (fifo-path)
-  ;; Better to use file-notify by Shinmera.
   (loop until (probe-file fifo-path))
-  ;; (format t "monitor-fifo here~%") (force-output) ; TODO use log
-  (with-open-file (fifo fifo-path)
-    ;; FIXME This problem is serious. It makes the following form breaks:
-    ;; (loop for i from 0 to 1000
-    ;;       do (lparallel:future (async-py-eval "1+1"))
-    ;;          (format t ": ~a~%" i))
-    ;;
-    ;; FIXME Even though the FIFO is opened, if Lisp starts reading
-    ;; before python is writing, then Lisp just hangs there.
-    ;; (sleep 1)                     ; kludge
-    ;; (loop until (listen fifo))
-    ;; (format t "monitor-fifo here again~%") (force-output) ; TODO use log
-    (let ((msg (uiop:read-file-string fifo)))
-      (format t "Received message: ~a~%" msg) (force-output)
-      msg)))
-
-(with-open-file (fifo fifo-path)
-  (sleep 1)
-  (format t "monitor-fifo here again~%") (force-output) ; TODO use log
-  (let ((msg (uiop:read-file-string fifo)))
-    (format t "Received message: ~a~%" msg) (force-output)
+  (let ((msg (uiop:read-file-string fifo-path)))
+    ;; (format t "Received message: ~a" msg) (force-output)
     msg))
 
-(defun async-py-eval-request (content)
-  (let* ((fifo-path (read-from-string
-                     (py-request "generic"
-                                 (list "mode"        "eval"
-                                       "content"      content))))
+(defun async-py-request (mode content)
+  (let* ((fifo-path
+           (read-from-string
+            (py-request "generic"
+                        (list "mode"    mode
+                              "content" content))))
          (msg (monitor-fifo fifo-path)))
     msg))
 
 (defun async-py-eval (content)
-  (with ((msg (async-py-eval-request content))
+  (with ((msg (async-py-request "eval" content))
          (((kind :kind) (body :body)) ? (decode msg)))
     (case kind
       (#\r (identity (read-from-string body)))
       (#\e (error 'pyerror :text body)))))
 
-;; TODO Suppoer execution.
+(defun async-py-exec (content)
+  (with ((msg (async-py-request "exec" content))
+         (((kind :kind) (body :body)) ? (decode msg)))
+    (case kind
+      (#\r (identity (read-from-string body)))
+      (#\e (error 'pyerror :text body)))))
+
+;; ;; TODO Support execution.
 ;; (defun async-py-exec (content)
 ;;   (py-request "generic"
 ;;               (list "mode"        "exec"
@@ -95,16 +84,16 @@
 
 
 
-;; ZMQ
-(defun server ()
-  "Bind to socket and wait to receive a message.  After receipt,
-  return the message \"OK\"."
-  (zmq:with-context (ctx 1)
-    (zmq:with-socket (socket ctx zmq:rep)
-      (zmq:bind socket "tcp://lo:5555")
-      (loop
-       (let ((query (make-instance 'zmq:msg)))
-         (zmq:recv socket query)
-         (format t "Recieved query: '~A'~%"
-                 (zmq:msg-data-as-string query) ))
-       (zmq:send socket (make-instance 'zmq:msg :data "OK")) ))))
+;; ;; TODO ZMQ
+;; (defun server ()
+;;   "Bind to socket and wait to receive a message.  After receipt,
+;;   return the message \"OK\"."
+;;   (zmq:with-context (ctx 1)
+;;     (zmq:with-socket (socket ctx zmq:rep)
+;;       (zmq:bind socket "tcp://lo:5555")
+;;       (loop
+;;        (let ((query (make-instance 'zmq:msg)))
+;;          (zmq:recv socket query)
+;;          (format t "Recieved query: '~A'~%"
+;;                  (zmq:msg-data-as-string query) ))
+;;        (zmq:send socket (make-instance 'zmq:msg :data "OK")) ))))

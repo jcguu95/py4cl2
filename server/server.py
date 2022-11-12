@@ -5,10 +5,10 @@ from fifo import *
 from py2lisp import *
 
 def work (request, fifopath):
-    mode, expression = request["mode"], request["content"]
+    mode, content = request["mode"], request["content"]
     if mode == "eval":
         try:
-            obj  = eval(expression)
+            obj  = eval(content)
             dic  = lispify(obj)
             kind = dic["kind"]
             body = dic["body"]
@@ -16,21 +16,31 @@ def work (request, fifopath):
             kind = "error"
             body = lispify(e)["body"]
         msg = encode(kind, body)
-    # TODO Support "exec" later.
-    # elif mode == "exec":
-    #     exec(content)
-    #     body = "NIL"
-    # print("Returning body: ", body)
+    elif mode == "exec":
+        try:
+            exec(content)
+            body = "T"
+            kind = "eval"
+        except Exception as e:
+            kind = "error"
+            body = lispify(e)["body"]
+        msg = encode(kind, body)
     try:
-        print("Sending message: ", msg)
+        print("Sending message: ", msg, "\n")
         create_fifo(fifopath)
         write_fifo(fifopath, msg)
     finally:
+        # TODO Find if I can wait for idle time for deletion.
         async_remove_fifo(fifopath,120)
+    # request["final"] = time.time()
+    # print("Finally, ", request)
+    # print("Time Elaspe: ", request["final"] - request["start"])
+    return request
 
 def handle_request (request):
     fifopath = gen_fifopath()
-    worker = Thread(target=work, args=(request,fifopath))
+    worker = Thread(target=work,
+                    args=(request,fifopath))
     worker.start()
     return fifopath
 
@@ -65,11 +75,16 @@ class Data(BaseModel):
     mode:        str
     content:     str
 
+# TODO Can't start too many threads. Need to check resources
+# before giving permission for threads.
 @app.post('/generic')
 async def method_generic (data: Data):
-    request = {"mode":        data.mode,
-               "content":     data.content}
-    print("Received request:", request)
+    # start   = time.time()
+    request = {"mode":    data.mode,
+               "content": data.content,
+               # "start":   start
+               }
+    # print(start, "Received request:", request)
     return handle_request(request)
 
 DEFAULT_PORT=8787

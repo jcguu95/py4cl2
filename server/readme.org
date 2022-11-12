@@ -1,11 +1,24 @@
 * Usage
 
 #+begin_src common-lisp
-(async-py-eval "[1, 2, [True, False], {3: 4}, \"hello\"]")
-;; => #(1 2 #(T NIL) #<HASH-TABLE :TEST EQUALP :COUNT 1 {7008B7FF43}> "hello")
+(async-py-eval "[1, 2, [True, False], {3:4}, \"hello\", 5.6, 7+8j]")
+;; => #(1 2 #(T NIL) #<HASH-TABLE :TEST EQUALP :COUNT 1 {701DE33203}> "hello" 5.6d0 #C(7.0d0 8.0d0))
 #+end_src
 
-* current problem
+#+begin_src common-lisp
+(async-py-exec "def g (): return 8")
+(async-py-eval "g()")
+;; => 8 (4 bits, #x8, #o10, #b1000)
+#+end_src
+
+* Features to add
+
++ =defpyfun=, =defpymodule=
++ Passing lisp objects (e.g. symbols and the general) to python.
++ Passing python objects to Lisp.
++ Garbage collection for remote object handlers.
+
+* Current problems
 
 FastAPI can handle around 200 requests per second.
 

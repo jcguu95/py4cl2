@@ -30,9 +30,14 @@ return_stream = sys.stdout
 output_stream = sys.stderr
 sys.stdout = sys.stderr
 
-eval_globals = {}
 config = {}
-eval_globals["_py4cl_config_file_name"] = ".config"
+
+# eval_globals store the environment used
+# when evaluating strings from Lisp
+eval_globals = {
+	"_py4cl_config_file_name" : ".config"
+}
+
 def load_config():
 	config_file = sys.argv[1] + eval_globals["_py4cl_config_file_name"]
 	if os.path.exists(config_file):
@@ -61,7 +66,7 @@ class Symbol(object):
 	def __str__(self):
 		return self._name
 	def __repr__(self):
-		return "Symbol("+self._name+")"
+		return "Symbol({0})".format(self._name)
 
 class LispCallbackObject (object):
 	"""
@@ -80,8 +85,7 @@ class LispCallbackObject (object):
 		"""
 		Delete this object, sending a message to Lisp
 		"""
-		return_stream.write("d")
-		send_value(self.handle)
+		send_value("d", self.handle)
 
 	def __call__(self, *args, **kwargs):
 		"""
@@ -100,8 +104,7 @@ class LispCallbackObject (object):
 		old_return_values = return_values # Save to restore after
 		try:
 			return_values = 0
-			return_stream.write("c")
-			send_value((self.handle, allargs))
+			send_value("c", (self.handle, allargs))
 		finally:
 			return_values = old_return_values
 
@@ -132,20 +135,18 @@ class UnknownLispObject (object):
 		"""
 		try:
 			sys.stdout = return_stream
-			return_stream.write("d")
-			send_value(self.handle)
+			send_value("d", self.handle)
 		finally:
 			sys.stdout = output_stream
 
 	def __str__(self):
-		return "UnknownLispObject(\""+self.lisptype+"\", "+str(self.handle)+")"
+		return "UnknownLispObject(\"{0}\", {1})".format(self.lisptype, str(self.handle))
 
 	def __getattr__(self, attr):
 		# Check if there is a slot with this name
 		try:
 			sys.stdout = return_stream
-			return_stream.write("s") # Slot read
-			send_value((self.handle, attr))
+			send_value("s", (self.handle, attr)) # Slot read
 		finally:
 			sys.stdout = output_stream
 
@@ -157,22 +158,21 @@ class UnknownLispObject (object):
 			return object.__setattr__(self, attr, value)
 		try:
 			sys.stdout = return_stream
-			return_stream.write("S") # Slot write
-			send_value((self.handle, attr, value))
+			send_value("S", (self.handle, attr, value)) # Slot write
 		finally:
 			sys.stdout = output_stream
 		# Wait until finished, to syncronise
 		return message_dispatch_loop()
 
 python_to_lisp_type = {
-	bool: "BOOLEAN",
-	type(None): "NULL",
-	int: "INTEGER",
-	float: "FLOAT",
-	complex: "COMPLEX",
-	list: "VECTOR",
-	dict: "HASH-TABLE",
-	str: "STRING",
+	bool       : "BOOLEAN",
+	type(None) : "NULL",
+	int        : "INTEGER",
+	float      : "FLOAT",
+	complex    : "COMPLEX",
+	list       : "VECTOR",
+	dict       : "HASH-TABLE",
+	str        : "STRING",
 }
 
 try:
@@ -260,7 +260,7 @@ if numpy_is_installed: #########################################################
 		try:
 			return numpy_cl_type[numpy_type]
 		except KeyError:
-			raise Exception("Do not know how to convert " + str(numpy_type) + " to CL")
+			raise Exception("Do not know how to convert {0} to CL.".format(str(numpy_type)))
 
 	def lispify_ndarray(obj):
 		"""Convert a NumPy array to a string which can be read by lisp
@@ -277,20 +277,17 @@ if numpy_is_installed: #########################################################
 			NUMPY_PICKLE_INDEX += 1
 			with open(numpy_pickle_location, "wb") as f:
 				numpy.save(f, obj, allow_pickle = True)
-
 			array = "#.(numpy-file-format:load-array \"" + numpy_pickle_location + "\")"
 			return array
 		if obj.ndim == 0:
 			# Convert to scalar then lispify
 			return lispify(obj.item())
-
 		array = "(cl:make-array " + str(obj.size) + " :initial-contents (cl:list " \
 			+ " ".join(map(lispify, numpy.ndarray.flatten(obj))) + ") :element-type " \
 			+ numpy_to_cl_type(obj.dtype) + ")"
 		array = "#.(cl:make-array (cl:quote " + lispify(obj.shape) + ") :element-type " \
 			+ numpy_to_cl_type(obj.dtype) + " :displaced-to " + array + " :displaced-index-offset 0)"
 		return array
-
 	# Register the handler to convert Python -> Lisp strings
 	lispifiers.update({
 		numpy.ndarray: lispify_ndarray,
@@ -354,10 +351,11 @@ def recv_value():
 	"""
 	return eval(recv_string(), eval_globals)
 
-def send_value(value):
+def send_value(cmd_type, value):
 	"""
 	Send a value to stdout as a string, with length of string first
 	"""
+	return_stream.write(cmd_type)
 	try:
 		# if type(value) == str and return_values > 0:
 		# value_str = value # to handle stringified-errors along with remote-objects
@@ -379,13 +377,11 @@ def return_value(value):
 	"""
 	if isinstance(value, Exception):
 		return return_error(value)
-	return_stream.write("r")
-	return_stream.flush()
-	send_value(value)
+	# return_stream.flush() # TODO not sure
+	send_value("r", value)
 
 def return_error(error):
-	return_stream.write("e")
-	send_value(error)
+	send_value("e", error)
 
 def pythonize(value): # assumes the symbol name is downcased by the lisp process
 	"""
@@ -435,44 +431,44 @@ def message_dispatch_loop():
 			elif cmd_type == "o":  # Return values when possible (default)
 				return_values -= 1
 			else:
-				return_error("Unknown message type \"{0}\"".format(cmd_type))
+				return_error("Unknown message type \"{0}\".".format(cmd_type))
 		except KeyboardInterrupt as e: # to catch SIGINT
 			# output_stream.write("Python interrupted!\n")
 			return_value(None)
 		except Exception as e:
 			return_error(e)
 
-
 # Store for python objects which cannot be translated to Lisp objects
 python_objects = {}
 python_handle = itertools.count(0)
 
-# Make callback function accessible to evaluation
-eval_globals["_py4cl_LispCallbackObject"] = LispCallbackObject
-eval_globals["_py4cl_Symbol"] = Symbol
-eval_globals["_py4cl_UnknownLispObject"] = UnknownLispObject
-eval_globals["_py4cl_objects"] = python_objects
-eval_globals["_py4cl_generator"] = generator
-# These store the environment used when eval-ing strings from Lisp
-eval_globals["_py4cl_config"] = config
-eval_globals["_py4cl_load_config"] = load_config
-if numpy_is_installed:
-	# NumPy is used for Lisp -> Python conversion of multidimensional arrays
-	eval_globals["_py4cl_numpy"] = numpy
-	eval_globals["_py4cl_load_pickled_ndarray"] \
-		= load_pickled_ndarray
-
 # Handle fractions (RATIO type)
 # Lisp will pass strings containing "_py4cl_fraction(n,d)"
 # where n and d are integers.
-
 import fractions
-eval_globals["_py4cl_fraction"] = fractions.Fraction
-
 # Turn a Fraction into a Lisp RATIO
 lispifiers[fractions.Fraction] = str
 
+eval_globals.update({
+	"_py4cl_objects"            : python_objects,
+	"_py4cl_LispCallbackObject" : LispCallbackObject,
+	"_py4cl_Symbol"             : Symbol,
+	"_py4cl_UnknownLispObject"  : UnknownLispObject,
+	"_py4cl_generator"          : generator,
+	"_py4cl_load_config"        : load_config,
+	"_py4cl_fraction"           : fractions.Fraction,
+	"_py4cl_config"             : config
+})
+
+if numpy_is_installed:
+	eval_globals.update({
+		"_py4cl_numpy"                : numpy,
+		# FIXME Is this a bug? load_pickled_ndarray should not be global.
+		"_py4cl_load_pickled_ndarray" : load_pickled_ndarray
+	})
+
 # Lisp-side customize-able lispifiers
+# FIXME: Style of code below has to be fixed.
 # FIXME: Is there a better way than going to each of the above and doing manually?
 old_lispifiers = lispifiers.copy()
 for key in lispifiers.keys():

@@ -48,3 +48,12 @@ Report the issues at https://github.com/digikar99/py4cl2/issues
                         (format *error-output*
                                 "If you have already set up the tests, then something is wrong,
 as asdf was unable to find \"py4cl2-tests\".")))))
+
+(defsystem "py4cl2/cffi"
+  :pathname #P"cffi/"
+  :depends-on ("cffi"
+               "alexandria")
+  :serial t
+  :components ((:static-file "libpychecks.so")
+               (:file "package")
+               (:file "lispifiers")))

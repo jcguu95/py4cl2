@@ -56,4 +56,7 @@ as asdf was unable to find \"py4cl2-tests\".")))))
   :serial t
   :components ((:static-file "libpychecks.so")
                (:file "package")
-               (:file "lispifiers")))
+               (:file "pythonizers")
+               (:file "python-process")
+               (:file "lispifiers")
+               (:file "callpython")))

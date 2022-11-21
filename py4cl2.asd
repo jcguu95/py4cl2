@@ -51,7 +51,8 @@ as asdf was unable to find \"py4cl2-tests\".")))))
 
 (defsystem "py4cl2/cffi"
   :pathname #P"cffi/"
-  :depends-on ("cffi"
+  :depends-on ("bordeaux-threads"
+               "cffi"
                "alexandria")
   :serial t
   :components ((:static-file "libpychecks.so")

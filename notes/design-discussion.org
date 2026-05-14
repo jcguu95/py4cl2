@@ -1,0 +1,387 @@
+#+TITLE: 多語言 Runtime 橋接系統設計討論
+#+AUTHOR: jcguu95
+#+DATE: 2026-05-13
+#+LANGUAGE: zh-TW
+#+OPTIONS: toc:3 num:t
+
+* 背景：py4cl2 是什麼
+
+py4cl2 是一個 Common Lisp ↔ Python 橋接庫，讓你在 Lisp 程式裡直接呼叫
+Python 生態系（NumPy、SciPy、Matplotlib 等）。它是 [[https://github.com/bendudson/py4cl][bendudson/py4cl]] 的
+fork，由 digikar99 擴展維護。
+
+** 運作原理
+
+啟動一個 Python 子行程，透過 stdin/stdout 進行雙向通訊：
+
+- Lisp 端序列化資料傳給 Python（=writer.lisp=）
+- Python 端執行後把結果序列化傳回（=reader.lisp=）
+- 支援雙向 callback：可以把 Lisp lambda 傳進 Python，Python 也可以回呼 Lisp
+
+** 主要 API
+
+- =defpymodule= — 自動把 Python 模組包成 Lisp package，讓你用 =(np:linspace ...)= 這樣的語法呼叫
+- =pycall=、=pyeval=、=pyexec= — 底層呼叫介面
+- =chain= — 方法鏈語法糖（=obj.method1().method2()=）
+- remote objects — Python 物件保留在 Python 端，Lisp 這邊拿到 handle
+
+** 優點
+
+1. API 設計自然：=(np:linspace :start 0 :stop 10 :num 20)= 貼近 Lisp 慣例
+2. 雙向 callback 有實作，含 =LispCallbackObject= 物件生命週期追蹤
+3. 用 CL condition system（=pyerror=、=python-eof-and-dead=），符合 Lisp 慣用做法
+4. 有測試（分離在 py4cl2-tests repo），這是比 py4cl 更重要的差異之一
+
+** 缺點
+
+1. 文字序列化通訊：大型 NumPy array 來回複製代價大
+2. 單一 Python 行程：=*python-process-busy-p*= 旗標顯示此限制已知但未解決
+3. =*freed-python-objects*= 有 race condition（見下節）
+4. =py4cl.py= 仍有 Python 2 相容性殘骸（=from __future__ import print_function=）
+
+* 已知問題：=*freed-python-objects*= 的 Race Condition
+
+** 問題描述
+
+=src/reader.lisp:31=：
+
+#+BEGIN_SRC lisp
+(defun free-python-object (python-id handle)
+  (push (list python-id handle) *freed-python-objects*))
+#+END_SRC
+
+=push= 不是 atomic 操作，展開後等同於：
+
+#+BEGIN_SRC lisp
+(setq *freed-python-objects*
+      (cons (list python-id handle) *freed-python-objects*))
+#+END_SRC
+
+這是三個步驟：*READ → CONS → WRITE*。當兩個 GC finalizer thread 在
+WRITE 步驟交錯執行時，其中一個 thread 的 cons cell 會被覆蓋，handle
+從 list 中消失。=delete-freed-python-objects= 永遠看不到它，Python 端
+的 =_py4cl_objects[handle]= 永遠不會被 =del=，造成永久 memory leak。
+
+** 實驗復現
+
+在 Nix 隔離環境中執行（不污染本機）：
+
+#+BEGIN_SRC bash
+nix-shell -p sbcl --run 'sbcl --noinform --non-interactive --load race-demo.lisp'
+#+END_SRC
+
+8 個 thread 各 push 50,000 次，理論上應累積 400,000 個 handle：
+
+| Run | 拿到   | 丟失        |
+|-----+--------+-------------|
+|   1 | 95,121 | *304,879*   |
+|   2 | 94,300 | *305,700*   |
+|   3 | 75,259 | *324,741*   |
+|   4 | 87,559 | *312,441*   |
+|   5 | 79,784 | *320,216*   |
+
+每次約 76–81% 的 handle 在中度 thread 競爭下消失。
+
+** 修法
+
+*** 方案 A：portable，使用 bordeaux-threads（推薦）
+
+#+BEGIN_SRC lisp
+(defvar *freed-python-objects-lock*
+  (bt:make-lock "freed-python-objects"))
+
+(defun free-python-object (python-id handle)
+  (bt:with-lock-held (*freed-python-objects-lock*)
+    (push (list python-id handle) *freed-python-objects*)))
+
+(defun delete-freed-python-objects ()
+  (loop
+    (let ((id-handle
+            (bt:with-lock-held (*freed-python-objects-lock*)
+              (pop *freed-python-objects*))))
+      (unless id-handle (return))
+      (destructuring-bind (python-id handle) id-handle
+        (when (and (python-alive-p)
+                   (= *current-python-process-id* python-id))
+          (raw-pyexec "
+try:
+  del _py4cl_objects[" (%pythonize handle) "]
+except:
+  pass"))))))
+#+END_SRC
+
+*** 方案 B：lock-free CAS（僅 SBCL）
+
+#+BEGIN_SRC lisp
+(defun free-python-object (python-id handle)
+  (loop
+    (let ((old *freed-python-objects*))
+      (when (eq old (sb-ext:compare-and-swap
+                      (symbol-value '*freed-python-objects*)
+                      old
+                      (cons (list python-id handle) old)))
+        (return)))))
+#+END_SRC
+
+* 主僕架構 vs 對等架構
+
+** 現有的主僕模型
+
+py4cl2 目前是 *Lisp 是 master，Python 是 minion（subprocess）*。
+主僕關係是硬編進架構假設裡的：
+
+1. IPC 單向初始化：Lisp 啟動 Python subprocess，Python 只有一個
+   =while True= loop 在等命令，沒有能力主動發起呼叫
+2. 序列化格式不對稱：Lisp → Python 是 s-expr，Python → Lisp 是另一套
+3. 生命週期由 Lisp 控制：=start-python=、=stop-python= 全在 Lisp 這邊
+
+** 同一個 Process 的嵌入（CFFI 方案）
+
+py4cl2-cffi 做的是把 =libpython= 嵌進 Lisp 的同一個行程：
+
+#+BEGIN_SRC c
+Py_Initialize();
+PyObject *result = PyObject_Call(func, args, kwargs);
+#+END_SRC
+
+*重要：這依然不是對等的。* Lisp 是 =main()=，它呼叫 =Py_Initialize()=
+把 Python 解釋器當成函式庫載入。只是把「跨 process IPC」換成了「同
+process function call」，主僕關係沒有改變。
+
+反過來也可以做：把 ECL（Embeddable Common Lisp）嵌進 Python，讓
+Python 是主人，Lisp 是函式庫。
+
+** SBCL Safepoint 問題（同 process 嵌入的 known issue）
+
+SBCL 的 stop-the-world GC 使用 *safepoint 機制*：
+
+1. GC 需要發動時設一個 flag
+2. 每個 Lisp thread 在執行 Lisp 程式碼時，會*定期自己去檢查*這個 flag
+3. 看到 flag 就自己停下來等
+4. 等所有 thread 都停了，GC thread 才開始掃描 heap
+
+*問題*：當 Lisp thread 透過 CFFI 進入 CPython 的 C code 裡，它不再執
+行 Lisp 程式碼，也就不會檢查 safepoint flag。SBCL GC 必須等到該
+thread 從 C code 返回 Lisp 才能繼續。
+
+#+BEGIN_EXAMPLE
+SBCL GC:            「所有人停下來！」
+Lisp thread 1:      「好，我停了」
+Lisp thread 2:      「好，我停了」
+Thread 3（在 Python C code 裡）: ............（沒有反應）
+SBCL GC:            繼續等 thread 3......
+#+END_EXAMPLE
+
+大多數情況只是暫停時間不可預期，但有一種情況會造成*真正的 deadlock*：
+
+#+BEGIN_EXAMPLE
+Thread 3 在 Python 裡跑
+  → Python 需要 callback 回 Lisp
+  → Callback 需要 allocate 一個新的 Lisp 物件
+  → Allocate 觸發 GC
+  → GC 在等 thread 3 到達 safepoint
+  → Thread 3 在等 callback 完成
+  → 互相等，永遠卡住
+#+END_EXAMPLE
+
+* Timeout 的設計
+
+** Timeout 的本質
+
+Timeout 只告訴你「*什麼時候放棄等*」，但沒有告訴你「*放棄之後做什麼*」。
+
+GC deadlock 情境裡，timeout 之後的選項：
+
+1. *強行 kill foreign thread*：unsafe，C code 可能持有 lock、正在寫
+   malloc 內部結構，強行殺掉會 corrupt heap
+2. *跳過 stop-the-world，做 conservative scan*：假設「不知道那個
+   thread 的 stack 裡有什麼，就全部當成 live」。GC 可以繼續，但會漏
+   掉一些本來可以回收的物件
+3. *標記 thread 為 foreign，排除在外*：正確解。SBCL 本來就有「foreign
+   thread 不參與 safepoint」的機制，Java JNI 和 Go 的 cgo 都是這樣做
+
+** 主僕 vs 對等，timeout 設計的差異
+
+*主僕關係，timeout 很好設計*：
+
+- Master 知道它在等什麼（它自己發的命令）
+- Timeout 之後 master 有完整的 authority 做決定：殺掉 servant、重啟、
+  retry、換一個 servant
+- 語義清晰：「我等你 5 秒，你沒回來我就換人做」
+
+*對等關係，timeout 的問題是：timeout 之後誰來決定？*
+
+假設 A 和 B 互相等，A 先 timeout 之後單方面繼續執行，但 B 不知道 A
+已經放棄等它，兩邊的 state 開始 diverge。這不是解決了死鎖，而是製造
+了 split-brain。
+
+因此，對等關係的 timeout 本身不夠，還需要一個*共識協議*——timeout 之
+後雙方要 agree on 誰的版本是對的。這就是 Raft、Paxos 在解決的問題。
+本質上是在引入一個隱形的「仲裁者」角色，把對等關係變成了有第三方的
+關係。
+
+** 實際的解法
+
+*** Cooperative Handshake（最實用）
+
+不用 timeout，改成主動協議：
+
+- Thread 進入 foreign code 之前：「我要進去了，GC 不用等我」
+- Thread 從 foreign code 返回之後：「我回來了，告訴我 GC 期間發生了什麼」
+
+Java JNI、Go 的 cgo 都是這樣做。代價是每次 foreign call 都有一點
+overhead，但語義清晰，沒有 timeout 的不確定性。
+
+*** Heartbeat + Lease
+
+每個 participant 定期送 heartbeat。收不到 heartbeat 超過 lease 時間，
+就假定對方死了，單方面接管。這比 timeout 好，因為 lease 是*對方主動
+維持的承諾*。Kubernetes 的 node lease、etcd 的 leader election 都是這
+個模式。
+
+*** 資源排序（打破循環依賴）
+
+Dining Philosophers 的標準解法——給所有 resource 編號，規定永遠先拿
+編號小的。把對等的循環等待打破成單向的依賴順序，自然消除 deadlock，
+不需要 timeout。
+
+** 人際關係的類比
+
+*主僕關係的 timeout*：老闆交代員工一件事，說「下午三點給我結果」。
+三點沒交，老闆有 authority 做決定：找別人做、砍掉任務、追究責任。老
+闆不需要問員工同不同意這個決定。
+
+*對等關係的 timeout*：兩個平等的談判方，A 說「我的 offer 到今晚 12
+點截止」，B 說「我的 counter-offer 到明天早上 9 點截止」。如果雙方都
+沒讓步，deadline 過了之後——然後呢？沒有人有 authority 強制解決，談
+判就崩了。
+
+現實中對等關係的 deadlock 解法：
+
+1. *引入仲裁者*：法院、勞資調解委員會——本質是把對等關係變成「都服
+   從第三方的裁決」
+2. *先行動者原則*：「如果你不回應，我就視為同意」——把不確定性轉嫁
+   給對方
+3. *聲譽機制*：長期關係裡，誰先放棄等待是有記錄的。機器沒有「聲
+   譽」，這是人類系統特有的
+
+*最深層的類比*：對等關係的 timeout 問題，本質上是 *authority 的問題*。
+做決定需要 authority。主僕關係裡 authority 是內建的；對等關係裡
+authority 必須事先協商好，或者臨時引入第三方。沒有解決 authority 的
+問題，timeout 只是把死鎖推遲，不是解決。
+
+* 面向未來的系統設計
+
+** 核心設計原則：Symmetric Transport + Configurable Role Policy
+
+把兩件事分開：
+
+1. *Transport 層*：永遠對稱。任何一方都可以發訊息，wire format 一樣，能力一樣。
+2. *Role 層*：runtime 可以配置。Peer、Lisp-master、Python-master 都是
+   role policy，不是 protocol 的一部分。
+
+這樣做的動機：如果現在固定了一個 model，之後需要換幾乎等於重寫。先
+把 transport 層做對稱，上面的 role policy 反而很薄，切換成本低。
+
+** 真實世界的先例
+
+- *Erlang/OTP*：所有 process 都是對等的 actor，message passing 完全對
+  稱，但 OTP supervisor tree 在上面加了 hierarchy。Hierarchy 是 runtime
+  policy，不是 language constraint。
+
+- *Git*：所有 repo 的能力完全一樣，=git push/pull= 雙向都能做。大家習
+  慣上約定一個 =origin= 當 master——這是 convention，不是 protocol 的
+  硬限制。
+
+- *ZeroMQ*：transport 是對稱的 socket，但可以在上面套 push/pull、
+  pub/sub、req/rep 任何 topology pattern，切換不需要改 transport 層。
+
+** 多 Runtime 架構
+
+#+BEGIN_EXAMPLE
+Node A          Node B          Node C          Node D
+(SBCL)         (CPython)       (SBCL)          (CPython)
+  │               │               │               │
+  └───────────────┴───────────────┴───────────────┘
+                        │
+              Symmetric Transport
+              (NNG / NATS / ZeroMQ)
+                        │
+              Common Wire Protocol
+              (MessagePack + extension types)
+                        │
+              Role Registry
+              (topology as data, runtime configurable)
+#+END_EXAMPLE
+
+Role Registry 記錄誰是誰的 master、誰是 peer。任何 node 都可以查詢和
+修改它。可以是 in-process（一個 node 作為 registry），也可以是外部服務。
+
+可配置的 role policy：
+
+| Policy          | 說明                            |
+|-----------------+---------------------------------|
+| =:peer=         | 預設，最靈活，authority 需協商  |
+| =:lisp-master=  | Lisp 有 authority，GC 協調最簡單 |
+| =:python-master= | Python 有 authority            |
+| =:hierarchical= | 多對多時，誰管誰的樹狀結構      |
+
+** 三個真正難的問題
+
+*** 1. 統一的序列化
+
+Lisp 有 ratio、symbol、condition；Python 有 None、tuple、generator。
+需要一個 schema 能表達兩邊的型別而不偏袒任何一方。
+
+目前最實際的選擇：*MessagePack + extension types*。
+- JSON：太慢、太弱
+- protobuf：需要預先定義 schema
+- s-expr：對 Python 不友好
+
+*** 2. 跨 N 個 Runtime 的 GC 協調：Handle 模型
+
+*核心原則：不要跨 runtime 共享物件的所有權。*
+
+每個物件只屬於一個 runtime，其他 runtime 拿到的是 *handle*（一個整數
+ID）。Handle 的生命週期由擁有者管理：
+
+- Remote node 持有 handle 時，定期送「我還在用」的 heartbeat
+- 擁有者收不到 heartbeat 超過 lease 時間，就釋放該物件
+- 每個 runtime 的 GC 可以完全獨立運作
+
+這把 GC 問題轉成了 *lease 問題*，比跨 runtime 共享 GC 簡單得多。
+
+py4cl2 目前已有 handle 的雛形（=_py4cl_objects= dict、=make-python-object-finalize=），
+但缺乏 heartbeat 機制，也有上述的 race condition。
+
+*** 3. Role 切換的 Consistency
+
+從 peer 切到 master/servant 的當下，如果有 in-flight 的 request，需要
+一個 two-phase commit 式的 role transition 協議：
+
+1. 先 quiesce 所有 in-flight transaction
+2. 確認所有 node 都到達 quiescent state
+3. 切換 role
+4. 恢復執行
+
+** 與現有系統的對比
+
+| 系統              | 語言限制 | 對稱 transport | Configurable role | Handle-based GC |
+|-------------------+----------+----------------+-------------------+-----------------|
+| Erlang/OTP        | BEAM only | ✓              | ✓（supervisor tree） | ✓            |
+| Akka Cluster      | JVM only  | ✓              | ✓                 | ✓（JVM GC）   |
+| py4cl2 現狀       | Lisp+Python | ✗（單向）   | ✗                 | △（有 bug）   |
+| 目標架構          | 任意語言  | ✓              | ✓                 | ✓             |
+
+** 實作路徑建議
+
+1. *先做 transport 層*：用 NNG 或 NATS 加 MessagePack，實作 Lisp
+   adapter 和 Python adapter
+2. *Handle 機制*：修正現有 race condition，加入 heartbeat + lease
+3. *Role Registry*：最小版本是 Lisp 這邊的一個 hash table，記錄各
+   node 的 role
+4. *高層 API 保留*：=defpymodule= 等 API 作為 =:lisp-master= role preset
+   繼續存在，不需要使用者感知底層變化
+
+py4cl2 的序列化和通訊邏輯幾乎全部要重寫，但這是一個新專案，不是
+py4cl2 的 patch。
